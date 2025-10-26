@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Escanea y organiza tus Bon de Livraison con OCR automático">
+    <meta name="theme-color" content="#667eea">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <link rel="manifest" href="manifest.json">
+    <title>BL Scanner</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
+        .header { background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100; }
+        .header-content { max-width: 600px; margin: 0 auto; padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; }
+        .header-title h1 { color: #667eea; font-size: 22px; }
+        .header-title p { color: #666; font-size: 12px; }
+        .status-badge { font-size: 11px; font-weight: bold; padding: 5px 10px; border-radius: 20px; background: #d4edda; color: #155724; }
+        .container { max-width: 600px; margin: 0 auto; padding: 15px; }
+        .card { background: white; border-radius: 20px; padding: 20px; margin-bottom: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .card-title { font-size: 18px; font-weight: bold; color: #2d3748; margin-bottom: 15px; }
+        .btn { width: 100%; padding: 16px; border: none; border-radius: 12px; font-size: 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px; color: white; }
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .btn-secondary { background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); }
+        .btn-success { background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); flex: 2; }
+        .btn-warning { background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%); flex: 1; }
+        input[type="file"] { display: none; }
+        .preview-img { width: 100%; border-radius: 12px; margin: 15px 0; }
+        .loading { background: linear-gradient(135deg, #ebf4ff 0%, #e0e7ff 100%); border-radius: 12px; padding: 20px; margin: 15px 0; text-align: center; }
+        .spinner { border: 4px solid #e2e8f0; border-top: 4px solid #667eea; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .progress-text { color: #667eea; font-weight: bold; }
+        .data-box { background: linear-gradient(135deg, #f0fff4 0%, #c6f6d5 100%); border: 2px solid #48bb78; border-radius: 15px; padding: 20px; margin: 15px 0; }
+        .data-box-header { text-align: center; margin-bottom: 15px; }
+        .data-row { background: white; border-radius: 8px; padding: 12px; margin-bottom: 10px; display: flex; justify-content: space-between; }
+        .data-label { font-weight: bold; color: #2d3748; }
+        .data-value { color: #4a5568; text-align: right; }
+        .pdf-name-box { background: white; border: 2px dashed #667eea; border-radius: 10px; padding: 15px; margin: 15px 0; }
+        .pdf-name-box p { color: #667eea; font-family: monospace; font-size: 13px; word-break: break-all; }
+        .button-group { display: flex; gap: 10px; margin-top: 15px; }
+        .folder-badge { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 15px; border-radius: 10px; font-size: 14px; font-weight: bold; margin-bottom: 15px; display: inline-block; }
+        .doc-item { background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%); border-left: 4px solid #667eea; border-radius: 12px; padding: 15px; margin-bottom: 12px; }
+        .doc-name { font-weight: bold; font-size: 14px; color: #2d3748; margin-bottom: 8px; word-break: break-all; }
+        .doc-date { font-size: 12px; color: #718096; margin-bottom: 12px; }
+        .doc-actions { display: flex; gap: 8px; }
+        .doc-actions button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; }
+        .doc-download { background: #667eea; color: white; }
+        .doc-delete { background: #f56565; color: white; flex: 0 0 auto; padding: 12px 15px; }
+        .empty-state { text-align: center; padding: 50px 20px; color: #a0aec0; }
+        .info-box { background: linear-gradient(135deg, #ebf4ff 0%, #e0e7ff 100%); border: 2px solid #667eea; border-radius: 12px; padding: 15px; font-size: 13px; }
+        .info-box ul { list-style: none; padding: 0; }
+        .info-box li { padding: 8px 0; display: flex; gap: 8px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="header-title">
+                <h1>📄 BL Scanner</h1>
+                <p>Bon de Livraison PWA</p>
+            </div>
+            <div id="statusBadge" class="status-badge">🟢 Online</div>
+        </div>
+    </div>
+    <div class="container">
+        <div class="card">
+            <div class="card-title">📸 Escanear Documento</div>
+            <button class="btn btn-primary" onclick="document.getElementById('camera').click()">📷 Tomar Foto con Cámara</button>
+            <button class="btn btn-secondary" onclick="document.getElementById('file').click()">🖼️ Seleccionar de Galería</button>
+            <input type="file" id="camera" accept="image/*" capture="environment" onchange="handleImage(this)">
+            <input type="file" id="file" accept="image/*" onchange="handleImage(this)">
+            <div id="preview"></div>
+            <div id="loading" style="display:none;" class="loading">
+                <div class="spinner"></div>
+                <div class="progress-text" id="progressText">Procesando imagen...</div>
+            </div>
+            <div id="result"></div>
+        </div>
+        <div class="card">
+            <div class="card-title">📁 Documentos Guardados</div>
+            <div class="folder-badge">📂 BL.MTR 2025</div>
+            <div id="documentsCount" style="font-size: 14px; color: #666; margin-bottom: 15px;"></div>
+            <div id="documents"></div>
+        </div>
+        <div class="card">
+            <div class="card-title">ℹ️ Información PWA</div>
+            <div class="info-box">
+                <ul>
+                    <li><span>✅</span> <span>Funciona sin conexión</span></li>
+                    <li><span>✅</span> <span>Instalable como app nativa</span></li>
+                    <li><span>✅</span> <span>Datos guardados localmente</span></li>
+                    <li><span>✅</span> <span>OCR automático integrado</span></li>
+                    <li><span>✅</span> <span>Genera PDFs descargables</span></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <script>
+        let currentImageData = null, extractedData = null, documents = [];
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then(r => console.log('Service Worker registrado'))
+                    .catch(e => console.log('Error SW:', e));
+            });
+        }
+        window.addEventListener('online', updateOnlineStatus);
+        window.addEventListener('offline', updateOnlineStatus);
+        function updateOnlineStatus() {
+            const badge = document.getElementById('statusBadge');
+            if (navigator.onLine) {
+                badge.style.background = '#d4edda';
+                badge.style.color = '#155724';
+                badge.textContent = '🟢 Online';
+            } else {
+                badge.style.background = '#f8d7da';
+                badge.style.color = '#721c24';
+                badge.textContent = '🔴 Offline';
+            }
+        }
+        function loadDocuments() {
+            const saved = localStorage.getItem('bl_documents');
+            if (saved) {
+                documents = JSON.parse(saved);
+                renderDocuments();
+            } else {
+                renderDocuments();
+            }
+        }
+        function saveDocuments() {
+            localStorage.setItem('bl_documents', JSON.stringify(documents));
+        }
+        function handleImage(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                currentImageData = e.target.result;
+                document.getElementById('preview').innerHTML = 
+                    '<img src="' + e.target.result + '" class="preview-img" alt="Preview">';
+                processImage(e.target.result);
+            };
+            reader.readAsDataURL(file);
+        }
+        async function processImage(imageData) {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('result').innerHTML = '';
+            try {
+                document.getElementById('progressText').textContent = 'Inicializando OCR...';
+                const worker = await Tesseract.createWorker('fra', 1, {
+                    logger: m => {
+                        if (m.status === 'recognizing text') {
+                            const percent = Math.round(m.progress * 100);
+                            document.getElementById('progressText').textContent = 
+                                'Extrayendo texto... ' + percent + '%';
+                        }
+                    }
+                });
+                const { data: { text } } = await worker.recognize(imageData);
+                await worker.terminate();
+                extractedData = extractBLData(text);
+                document.getElementById('loading').style.display = 'none';
+                displayExtractedData();
+            } catch (error) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('result').innerHTML = 
+                    '<div class="info-box">❌ Error al procesar: ' + error.message + '</div>';
+            }
+        }
+        function extractBLData(text) {
+            let numero = '', fecha = '', cliente = '', nCommande = '';
+            const nombreMatch = text.match(/NOMBRE[:\s]+(\d+)/i) || 
+                               text.match(/N[°\s]*COMMANDE[:\s]+(\d+)/i);
+            if (nombreMatch) numero = nombreMatch[1];
+            const fechaMatch = text.match(/DATE[:\s]+(\d{2}[\/\-]\d{2}[\/\-]\d{4})/i) ||
+                              text.match(/(\d{2}[\/\-]\d{2}[\/\-]\d{4})/);
+            if (fechaMatch) fecha = fechaMatch[1].replace(/-/g, '/');
+            const clienteMatch = text.match(/GROUPEMENT[^\n]*/i) ||
+                                text.match(/SGTM[^\n]*/i);
+            if (clienteMatch) {
+                cliente = clienteMatch[0].trim().replace(/\s+/g, ' ').substring(0, 50);
+            }
+            const commandeMatch = text.match(/N[°\s]*COMMANDE[:\s]+(\w+)/i) ||
+                                 text.match(/COMMANDE[:\s]+(\w+)/i);
+            if (commandeMatch) nCommande = commandeMatch[1];
+            if (!numero) numero = Math.floor(Math.random() * 9000000 + 1000000).toString();
+            if (!fecha) fecha = new Date().toLocaleDateString('es-ES');
+            if (!cliente) cliente = 'CLIENTE EXTRAIDO';
+            if (!nCommande) nCommande = numero;
+            return { numero, fecha, cliente, nCommande };
+        }
+        function displayExtractedData() {
+            const pdfName = generatePDFName(extractedData);
+            document.getElementById('result').innerHTML = 
+                '<div class="data-box">' +
+                '<div class="data-box-header"><span style="font-size: 30px;">✅</span><h3>Datos Extraídos</h3></div>' +
+                '<div class="data-row"><span class="data-label">Número BL:</span><span class="data-value">' + extractedData.numero + '</span></div>' +
+                '<div class="data-row"><span class="data-label">Fecha:</span><span class="data-value">' + extractedData.fecha + '</span></div>' +
+                '<div class="data-row"><span class="data-label">Cliente:</span><span class="data-value">' + extractedData.cliente + '</span></div>' +
+                '<div class="data-row"><span class="data-label">N° Commande:</span><span class="data-value">' + extractedData.nCommande + '</span></div>' +
+                '<div class="pdf-name-box"><label style="font-size:12px;font-weight:bold;color:#666;margin-bottom:8px;display:block;">📄 Nombre del PDF:</label><p>' + pdfName + '</p></div>' +
+                '<div class="button-group">' +
+                '<button class="btn btn-warning" onclick="editData()">✏️ Editar</button>' +
+                '<button class="btn btn-success" onclick="saveDocument()">💾 Guardar</button>' +
+                '</div></div>';
+        }
+        function editData() {
+            const newNumero = prompt('Número BL:', extractedData.numero);
+            if (!newNumero) return;
+            const newFecha = prompt('Fecha (DD/MM/YYYY):', extractedData.fecha);
+            if (!newFecha) return;
+            const newCliente = prompt('Cliente:', extractedData.cliente);
+            if (!newCliente) return;
+            extractedData.numero = newNumero;
+            extractedData.fecha = newFecha;
+            extractedData.cliente = newCliente;
+            displayExtractedData();
+        }
+        function generatePDFName(data) {
+            const fechaFormatted = data.fecha.replace(/\//g, '-');
+            const clienteTruncated = data.cliente.substring(0, 30).trim();
+            return 'BL.' + data.numero + ' ' + fechaFormatted + ' ' + clienteTruncated + '.pdf';
+        }
+        function saveDocument() {
+            if (!extractedData || !currentImageData) return;
+            const doc = {
+                id: Date.now(),
+                fileName: generatePDFName(extractedData),
+                data: extractedData,
+                image: currentImageData,
+                timestamp: new Date().toISOString()
+            };
+            documents.unshift(doc);
+            saveDocuments();
+            renderDocuments();
+            document.getElementById('preview').innerHTML = '';
+            document.getElementById('result').innerHTML = '';
+            currentImageData = null;
+            extractedData = null;
+            alert('✅ Documento guardado exitosamente!\n\n📁 BL.MTR 2025/\n' + doc.fileName);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        function renderDocuments() {
+            const container = document.getElementById('documents');
+            const countEl = document.getElementById('documentsCount');
+            countEl.textContent = 'Total: ' + documents.length + ' documento' + (documents.length !== 1 ? 's' : '');
+            if (documents.length === 0) {
+                container.innerHTML = 
+                    '<div class="empty-state">' +
+                    '<div style="font-size:60px;opacity:0.3;margin-bottom:15px;">📄</div>' +
+                    '<p style="font-size:16px;font-weight:bold;margin-bottom:5px;">No hay documentos</p>' +
+                    '<p style="font-size:14px;">Escanea tu primer BL para comenzar</p>' +
+                    '</div>';
+                return;
+            }
+            container.innerHTML = documents.map(doc => 
+                '<div class="doc-item">' +
+                '<div class="doc-name">📄 ' + doc.fileName + '</div>' +
+                '<div class="doc-date">' + new Date(doc.timestamp).toLocaleString('es-ES') + '</div>' +
+                '<div class="doc-actions">' +
+                '<button class="doc-download" onclick="downloadPDF(' + doc.id + ')">⬇️ Descargar PDF</button>' +
+                '<button class="doc-delete" onclick="deleteDoc(' + doc.id + ')">🗑️</button>' +
+                '</div></div>'
+            ).join('');
+        }
+        async function downloadPDF(id) {
+            const doc = documents.find(d => d.id === id);
+            if (!doc) return;
+            try {
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF();
+                pdf.setFontSize(16);
+                pdf.setTextColor(102, 126, 234);
+                pdf.text('Bon de Livraison', 105, 15, { align: 'center' });
+                pdf.addImage(doc.image, 'JPEG', 10, 25, 190, 120);
+                pdf.setFontSize(12);
+                pdf.setTextColor(0, 0, 0);
+                pdf.text('Numero BL: ' + doc.data.numero, 15, 155);
+                pdf.text('Fecha: ' + doc.data.fecha, 15, 165);
+                pdf.text('Cliente: ' + doc.data.cliente, 15, 175);
+                pdf.text('N° Commande: ' + doc.data.nCommande, 15, 185);
+                pdf.setFontSize(9);
+                pdf.setTextColor(128, 128, 128);
+                pdf.text('Generado por BL Scanner PWA', 105, 290, { align: 'center' });
+                pdf.save(doc.fileName);
+                alert('✅ PDF descargado correctamente!\n\n' + doc.fileName);
+            } catch (error) {
+                alert('❌ Error al generar PDF:\n' + error.message);
+            }
+        }
+        function deleteDoc(id) {
+            if (!confirm('¿Seguro que deseas eliminar este documento?')) return;
+            documents = documents.filter(d => d.id !== id);
+            saveDocuments();
+            renderDocuments();
+        }
+        loadDocuments();
+        updateOnlineStatus();
+    </script>
+</body>
+</html>
