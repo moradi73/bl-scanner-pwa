@@ -518,4 +518,37 @@
                 
                 pdf.setFontSize(9);
                 pdf.setTextColor(128, 128, 128);
-                pdf.text('Generado por BL Scanner Pro', 105,
+                pdf.text('Generado por BL Scanner Pro', 105, 290, { align: 'center' });
+                
+                pdf.save(doc.fileName);
+                
+                alert('✅ PDF descargado!\n\n' + doc.fileName);
+            } catch (error) {
+                console.error('Error generando PDF:', error);
+                alert('❌ Error al generar PDF:\n' + error.message);
+            }
+        }
+
+        function deleteDoc(id) {
+            if (!confirm('¿Eliminar este documento?')) return;
+            
+            try {
+                documents = documents.filter(d => d.id !== id);
+                saveDocuments();
+                renderDocuments();
+            } catch (e) {
+                alert('❌ Error al eliminar');
+            }
+        }
+
+        loadDocuments();
+        updateOnlineStatus();
+
+        window.addEventListener('beforeunload', () => {
+            if (ocrWorker) {
+                ocrWorker.terminate().catch(() => {});
+            }
+        });
+    </script>
+</body>
+</html>
