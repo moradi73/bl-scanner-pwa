@@ -27,17 +27,22 @@
         .btn-secondary { background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); }
         .btn-success { background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); flex: 2; }
         .btn-warning { background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%); flex: 1; }
+        .btn-manual { background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%); }
         input[type="file"] { display: none; }
         .preview-img { width: 100%; border-radius: 12px; margin: 15px 0; }
         .loading { background: linear-gradient(135deg, #ebf4ff 0%, #e0e7ff 100%); border-radius: 12px; padding: 20px; margin: 15px 0; text-align: center; }
         .spinner { border: 4px solid #e2e8f0; border-top: 4px solid #667eea; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .progress-text { color: #667eea; font-weight: bold; }
+        .progress-text { color: #667eea; font-weight: bold; font-size: 14px; }
+        .error-box { background: linear-gradient(135deg, #fff5f5 0%, #fed7d7 100%); border: 2px solid #fc8181; border-radius: 12px; padding: 15px; margin: 15px 0; }
+        .error-box h3 { color: #c53030; margin-bottom: 10px; font-size: 16px; }
+        .error-box p { color: #742a2a; font-size: 14px; line-height: 1.5; }
+        .error-box button { margin-top: 10px; }
         .data-box { background: linear-gradient(135deg, #f0fff4 0%, #c6f6d5 100%); border: 2px solid #48bb78; border-radius: 15px; padding: 20px; margin: 15px 0; }
         .data-box-header { text-align: center; margin-bottom: 15px; }
         .data-row { background: white; border-radius: 8px; padding: 12px; margin-bottom: 10px; display: flex; justify-content: space-between; }
         .data-label { font-weight: bold; color: #2d3748; }
-        .data-value { color: #4a5568; text-align: right; }
+        .data-value { color: #4a5568; text-align: right; max-width: 60%; word-break: break-word; }
         .pdf-name-box { background: white; border: 2px dashed #667eea; border-radius: 10px; padding: 15px; margin: 15px 0; }
         .pdf-name-box p { color: #667eea; font-family: monospace; font-size: 13px; word-break: break-all; }
         .button-group { display: flex; gap: 10px; margin-top: 15px; }
@@ -53,6 +58,7 @@
         .info-box { background: linear-gradient(135deg, #ebf4ff 0%, #e0e7ff 100%); border: 2px solid #667eea; border-radius: 12px; padding: 15px; font-size: 13px; }
         .info-box ul { list-style: none; padding: 0; }
         .info-box li { padding: 8px 0; display: flex; gap: 8px; }
+        .tip-box { background: linear-gradient(135deg, #fef5e7 0%, #fde68a 100%); border: 2px solid #f59e0b; border-radius: 12px; padding: 12px; margin: 10px 0; font-size: 13px; color: #92400e; }
     </style>
 </head>
 <body>
@@ -72,11 +78,15 @@
             <button class="btn btn-secondary" onclick="document.getElementById('file').click()">🖼️ Seleccionar de Galería</button>
             <input type="file" id="camera" accept="image/*" capture="environment" onchange="handleImage(this)">
             <input type="file" id="file" accept="image/*" onchange="handleImage(this)">
+            <div class="tip-box">
+                💡 <strong>Consejo:</strong> Para mejor OCR, usa buena luz y enfoca bien el documento.
+            </div>
             <div id="preview"></div>
             <div id="loading" style="display:none;" class="loading">
                 <div class="spinner"></div>
                 <div class="progress-text" id="progressText">Procesando imagen...</div>
             </div>
+            <div id="error"></div>
             <div id="result"></div>
         </div>
         <div class="card">
@@ -100,6 +110,8 @@
     </div>
     <script>
         let currentImageData = null, extractedData = null, documents = [];
+        let ocrWorker = null;
+
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/service-worker.js')
@@ -107,8 +119,10 @@
                     .catch(e => console.log('Error SW:', e));
             });
         }
+
         window.addEventListener('online', updateOnlineStatus);
         window.addEventListener('offline', updateOnlineStatus);
+
         function updateOnlineStatus() {
             const badge = document.getElementById('statusBadge');
             if (navigator.onLine) {
@@ -121,21 +135,38 @@
                 badge.textContent = '🔴 Offline';
             }
         }
+
         function loadDocuments() {
             const saved = localStorage.getItem('bl_documents');
             if (saved) {
-                documents = JSON.parse(saved);
+                try {
+                    documents = JSON.parse(saved);
+                } catch (e) {
+                    console.error('Error cargando documentos:', e);
+                    documents = [];
+                }
                 renderDocuments();
             } else {
                 renderDocuments();
             }
         }
+
         function saveDocuments() {
-            localStorage.setItem('bl_documents', JSON.stringify(documents));
+            try {
+                localStorage.setItem('bl_documents', JSON.stringify(documents));
+            } catch (e) {
+                console.error('Error guardando documentos:', e);
+                alert('⚠️ Error al guardar. El almacenamiento puede estar lleno.');
+            }
         }
+
         function handleImage(input) {
             const file = input.files[0];
             if (!file) return;
+
+            document.getElementById('error').innerHTML = '';
+            document.getElementById('result').innerHTML = '';
+
             const reader = new FileReader();
             reader.onload = function(e) {
                 currentImageData = e.target.result;
@@ -143,57 +174,147 @@
                     '<img src="' + e.target.result + '" class="preview-img" alt="Preview">';
                 processImage(e.target.result);
             };
+            reader.onerror = function() {
+                showError('Error al leer la imagen', 'No se pudo cargar la imagen. Intenta de nuevo.');
+            };
             reader.readAsDataURL(file);
         }
+
         async function processImage(imageData) {
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').innerHTML = '';
+            document.getElementById('error').innerHTML = '';
+            
             try {
                 document.getElementById('progressText').textContent = 'Inicializando OCR...';
-                const worker = await Tesseract.createWorker('fra', 1, {
+                
+                // Verificar conexión
+                if (!navigator.onLine) {
+                    throw new Error('No hay conexión a internet. El OCR necesita internet la primera vez.');
+                }
+
+                // Crear worker con mejor manejo de errores
+                ocrWorker = await Tesseract.createWorker('fra', 1, {
                     logger: m => {
                         if (m.status === 'recognizing text') {
                             const percent = Math.round(m.progress * 100);
                             document.getElementById('progressText').textContent = 
                                 'Extrayendo texto... ' + percent + '%';
+                        } else if (m.status === 'loading tesseract core') {
+                            document.getElementById('progressText').textContent = 
+                                'Descargando OCR (solo primera vez)...';
+                        } else if (m.status === 'initializing tesseract') {
+                            document.getElementById('progressText').textContent = 
+                                'Preparando OCR...';
+                        } else if (m.status === 'loading language traineddata') {
+                            document.getElementById('progressText').textContent = 
+                                'Descargando idioma francés...';
                         }
+                    },
+                    errorHandler: err => {
+                        console.error('OCR Error:', err);
                     }
                 });
-                const { data: { text } } = await worker.recognize(imageData);
-                await worker.terminate();
+
+                const { data: { text } } = await ocrWorker.recognize(imageData);
+                
+                await ocrWorker.terminate();
+                ocrWorker = null;
+
+                if (!text || text.trim().length === 0) {
+                    throw new Error('No se pudo extraer texto de la imagen. Intenta con mejor luz o enfoque.');
+                }
+
                 extractedData = extractBLData(text);
                 document.getElementById('loading').style.display = 'none';
                 displayExtractedData();
+                
             } catch (error) {
+                console.error('Error procesando imagen:', error);
                 document.getElementById('loading').style.display = 'none';
-                document.getElementById('result').innerHTML = 
-                    '<div class="info-box">❌ Error al procesar: ' + error.message + '</div>';
+                
+                if (ocrWorker) {
+                    try {
+                        await ocrWorker.terminate();
+                    } catch (e) {}
+                    ocrWorker = null;
+                }
+                
+                showError(
+                    'Error al procesar imagen',
+                    error.message || 'Error desconocido. Intenta de nuevo o usa entrada manual.',
+                    true
+                );
             }
         }
+
+        function showError(title, message, showManualButton = false) {
+            let html = '<div class="error-box">' +
+                '<h3>❌ ' + title + '</h3>' +
+                '<p>' + message + '</p>';
+            
+            if (showManualButton) {
+                html += '<button class="btn btn-manual" onclick="showManualEntry()">' +
+                    '✏️ Ingresar Datos Manualmente' +
+                    '</button>';
+            }
+            
+            html += '</div>';
+            document.getElementById('error').innerHTML = html;
+        }
+
+        function showManualEntry() {
+            const numero = prompt('Número BL:', '') || Math.floor(Math.random() * 9000000 + 1000000).toString();
+            const fecha = prompt('Fecha (DD/MM/YYYY):', new Date().toLocaleDateString('es-ES')) || new Date().toLocaleDateString('es-ES');
+            const cliente = prompt('Cliente:', 'CLIENTE') || 'CLIENTE';
+            const nCommande = prompt('N° Commande:', numero) || numero;
+
+            extractedData = { numero, fecha, cliente, nCommande };
+            document.getElementById('error').innerHTML = '';
+            displayExtractedData();
+        }
+
         function extractBLData(text) {
             let numero = '', fecha = '', cliente = '', nCommande = '';
-            const nombreMatch = text.match(/NOMBRE[:\s]+(\d+)/i) || 
-                               text.match(/N[°\s]*COMMANDE[:\s]+(\d+)/i);
-            if (nombreMatch) numero = nombreMatch[1];
-            const fechaMatch = text.match(/DATE[:\s]+(\d{2}[\/\-]\d{2}[\/\-]\d{4})/i) ||
-                              text.match(/(\d{2}[\/\-]\d{2}[\/\-]\d{4})/);
-            if (fechaMatch) fecha = fechaMatch[1].replace(/-/g, '/');
-            const clienteMatch = text.match(/GROUPEMENT[^\n]*/i) ||
-                                text.match(/SGTM[^\n]*/i);
-            if (clienteMatch) {
-                cliente = clienteMatch[0].trim().replace(/\s+/g, ' ').substring(0, 50);
+            
+            try {
+                // Extraer con expresiones regulares mejoradas
+                const nombreMatch = text.match(/NOMBRE[:\s]+(\d+)/i) || 
+                                   text.match(/N[°\s]*COMMANDE[:\s]*([A-Z0-9\-]+)/i) ||
+                                   text.match(/(\d{7})/);
+                if (nombreMatch) numero = nombreMatch[1];
+                
+                const fechaMatch = text.match(/DATE[:\s]+(\d{2}[\/\-]\d{2}[\/\-]\d{4})/i) ||
+                                  text.match(/(\d{2}[\/\-]\d{2}[\/\-]\d{4})/);
+                if (fechaMatch) fecha = fechaMatch[1].replace(/-/g, '/');
+                
+                const clienteMatch = text.match(/GROUPEMENT[^\n]*/i) ||
+                                    text.match(/SGTM[^\n]*/i) ||
+                                    text.match(/DEPOT[^\n]*/i);
+                if (clienteMatch) {
+                    cliente = clienteMatch[0].trim().replace(/\s+/g, ' ').substring(0, 50);
+                }
+                
+                const commandeMatch = text.match(/N[°\s]*COMMANDE[:\s]*([A-Z0-9\-]+)/i) ||
+                                     text.match(/COMMANDE[:\s]*([A-Z0-9\-]+)/i);
+                if (commandeMatch) nCommande = commandeMatch[1];
+
+            } catch (e) {
+                console.error('Error extrayendo datos:', e);
             }
-            const commandeMatch = text.match(/N[°\s]*COMMANDE[:\s]+(\w+)/i) ||
-                                 text.match(/COMMANDE[:\s]+(\w+)/i);
-            if (commandeMatch) nCommande = commandeMatch[1];
+
+            // Valores por defecto si no se encontraron
             if (!numero) numero = Math.floor(Math.random() * 9000000 + 1000000).toString();
             if (!fecha) fecha = new Date().toLocaleDateString('es-ES');
             if (!cliente) cliente = 'CLIENTE EXTRAIDO';
             if (!nCommande) nCommande = numero;
+
             return { numero, fecha, cliente, nCommande };
         }
+
         function displayExtractedData() {
             const pdfName = generatePDFName(extractedData);
+            
             document.getElementById('result').innerHTML = 
                 '<div class="data-box">' +
                 '<div class="data-box-header"><span style="font-size: 30px;">✅</span><h3>Datos Extraídos</h3></div>' +
@@ -207,6 +328,7 @@
                 '<button class="btn btn-success" onclick="saveDocument()">💾 Guardar</button>' +
                 '</div></div>';
         }
+
         function editData() {
             const newNumero = prompt('Número BL:', extractedData.numero);
             if (!newNumero) return;
@@ -214,39 +336,61 @@
             if (!newFecha) return;
             const newCliente = prompt('Cliente:', extractedData.cliente);
             if (!newCliente) return;
+            const newCommande = prompt('N° Commande:', extractedData.nCommande);
+
             extractedData.numero = newNumero;
             extractedData.fecha = newFecha;
             extractedData.cliente = newCliente;
+            if (newCommande) extractedData.nCommande = newCommande;
+            
             displayExtractedData();
         }
+
         function generatePDFName(data) {
             const fechaFormatted = data.fecha.replace(/\//g, '-');
             const clienteTruncated = data.cliente.substring(0, 30).trim();
             return 'BL.' + data.numero + ' ' + fechaFormatted + ' ' + clienteTruncated + '.pdf';
         }
+
         function saveDocument() {
-            if (!extractedData || !currentImageData) return;
-            const doc = {
-                id: Date.now(),
-                fileName: generatePDFName(extractedData),
-                data: extractedData,
-                image: currentImageData,
-                timestamp: new Date().toISOString()
-            };
-            documents.unshift(doc);
-            saveDocuments();
-            renderDocuments();
-            document.getElementById('preview').innerHTML = '';
-            document.getElementById('result').innerHTML = '';
-            currentImageData = null;
-            extractedData = null;
-            alert('✅ Documento guardado exitosamente!\n\n📁 BL.MTR 2025/\n' + doc.fileName);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            if (!extractedData || !currentImageData) {
+                alert('⚠️ No hay datos para guardar');
+                return;
+            }
+
+            try {
+                const doc = {
+                    id: Date.now(),
+                    fileName: generatePDFName(extractedData),
+                    data: extractedData,
+                    image: currentImageData,
+                    timestamp: new Date().toISOString()
+                };
+
+                documents.unshift(doc);
+                saveDocuments();
+                renderDocuments();
+                
+                document.getElementById('preview').innerHTML = '';
+                document.getElementById('result').innerHTML = '';
+                document.getElementById('error').innerHTML = '';
+                currentImageData = null;
+                extractedData = null;
+                
+                alert('✅ Documento guardado exitosamente!\n\n📁 BL.MTR 2025/\n' + doc.fileName);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            } catch (e) {
+                console.error('Error guardando documento:', e);
+                alert('❌ Error al guardar el documento: ' + e.message);
+            }
         }
+
         function renderDocuments() {
             const container = document.getElementById('documents');
             const countEl = document.getElementById('documentsCount');
+            
             countEl.textContent = 'Total: ' + documents.length + ' documento' + (documents.length !== 1 ? 's' : '');
+            
             if (documents.length === 0) {
                 container.innerHTML = 
                     '<div class="empty-state">' +
@@ -256,6 +400,7 @@
                     '</div>';
                 return;
             }
+
             container.innerHTML = documents.map(doc => 
                 '<div class="doc-item">' +
                 '<div class="doc-name">📄 ' + doc.fileName + '</div>' +
@@ -266,39 +411,64 @@
                 '</div></div>'
             ).join('');
         }
+
         async function downloadPDF(id) {
             const doc = documents.find(d => d.id === id);
             if (!doc) return;
+
             try {
                 const { jsPDF } = window.jspdf;
                 const pdf = new jsPDF();
+                
                 pdf.setFontSize(16);
                 pdf.setTextColor(102, 126, 234);
                 pdf.text('Bon de Livraison', 105, 15, { align: 'center' });
+                
                 pdf.addImage(doc.image, 'JPEG', 10, 25, 190, 120);
+                
                 pdf.setFontSize(12);
                 pdf.setTextColor(0, 0, 0);
                 pdf.text('Numero BL: ' + doc.data.numero, 15, 155);
                 pdf.text('Fecha: ' + doc.data.fecha, 15, 165);
                 pdf.text('Cliente: ' + doc.data.cliente, 15, 175);
                 pdf.text('N° Commande: ' + doc.data.nCommande, 15, 185);
+                
                 pdf.setFontSize(9);
                 pdf.setTextColor(128, 128, 128);
                 pdf.text('Generado por BL Scanner PWA', 105, 290, { align: 'center' });
+                
                 pdf.save(doc.fileName);
+                
                 alert('✅ PDF descargado correctamente!\n\n' + doc.fileName);
             } catch (error) {
+                console.error('Error generando PDF:', error);
                 alert('❌ Error al generar PDF:\n' + error.message);
             }
         }
+
         function deleteDoc(id) {
             if (!confirm('¿Seguro que deseas eliminar este documento?')) return;
-            documents = documents.filter(d => d.id !== id);
-            saveDocuments();
-            renderDocuments();
+            
+            try {
+                documents = documents.filter(d => d.id !== id);
+                saveDocuments();
+                renderDocuments();
+            } catch (e) {
+                console.error('Error eliminando documento:', e);
+                alert('❌ Error al eliminar: ' + e.message);
+            }
         }
+
+        // Inicializar
         loadDocuments();
         updateOnlineStatus();
+
+        // Limpiar worker si la página se cierra
+        window.addEventListener('beforeunload', () => {
+            if (ocrWorker) {
+                ocrWorker.terminate().catch(() => {});
+            }
+        });
     </script>
 </body>
 </html>
