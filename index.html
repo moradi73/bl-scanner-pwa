@@ -8,9 +8,10 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <link rel="manifest" href="manifest.json">
-    <title>BL Scanner</title>
+    <title>BL Scanner Pro</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://docs.opencv.org/4.5.2/opencv.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
@@ -28,8 +29,12 @@
         .btn-success { background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); flex: 2; }
         .btn-warning { background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%); flex: 1; }
         .btn-manual { background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%); }
+        .btn-crop { background: linear-gradient(135deg, #9f7aea 0%, #805ad5 100%); }
         input[type="file"] { display: none; }
-        .preview-img { width: 100%; border-radius: 12px; margin: 15px 0; }
+        .preview-container { position: relative; margin: 15px 0; }
+        .preview-img { width: 100%; border-radius: 12px; }
+        .canvas-container { position: relative; width: 100%; overflow: hidden; border-radius: 12px; }
+        #previewCanvas, #croppedCanvas { max-width: 100%; height: auto; display: block; border-radius: 12px; }
         .loading { background: linear-gradient(135deg, #ebf4ff 0%, #e0e7ff 100%); border-radius: 12px; padding: 20px; margin: 15px 0; text-align: center; }
         .spinner { border: 4px solid #e2e8f0; border-top: 4px solid #667eea; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -59,13 +64,15 @@
         .info-box ul { list-style: none; padding: 0; }
         .info-box li { padding: 8px 0; display: flex; gap: 8px; }
         .tip-box { background: linear-gradient(135deg, #fef5e7 0%, #fde68a 100%); border: 2px solid #f59e0b; border-radius: 12px; padding: 12px; margin: 10px 0; font-size: 13px; color: #92400e; }
+        .feature-badge { background: linear-gradient(135deg, #9f7aea 0%, #805ad5 100%); color: white; padding: 5px 12px; border-radius: 15px; font-size: 11px; font-weight: bold; display: inline-block; margin-left: 8px; }
+        .crop-controls { display: flex; gap: 8px; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div class="header">
         <div class="header-content">
             <div class="header-title">
-                <h1>📄 BL Scanner</h1>
+                <h1>📄 BL Scanner Pro <span class="feature-badge">✂️ Auto-Crop</span></h1>
                 <p>Bon de Livraison PWA</p>
             </div>
             <div id="statusBadge" class="status-badge">🟢 Online</div>
@@ -79,9 +86,15 @@
             <input type="file" id="camera" accept="image/*" capture="environment" onchange="handleImage(this)">
             <input type="file" id="file" accept="image/*" onchange="handleImage(this)">
             <div class="tip-box">
-                💡 <strong>Consejo:</strong> Para mejor OCR, usa buena luz y enfoca bien el documento.
+                ✂️ <strong>Auto-Recorte:</strong> La app detectará automáticamente el documento y recortará los bordes.
             </div>
             <div id="preview"></div>
+            <div id="cropControls" style="display:none;">
+                <div class="crop-controls">
+                    <button class="btn btn-crop" onclick="acceptCrop()">✅ Aceptar Recorte</button>
+                    <button class="btn btn-warning" onclick="retryCrop()">🔄 Reintentar</button>
+                </div>
+            </div>
             <div id="loading" style="display:none;" class="loading">
                 <div class="spinner"></div>
                 <div class="progress-text" id="progressText">Procesando imagen...</div>
@@ -99,18 +112,42 @@
             <div class="card-title">ℹ️ Información PWA</div>
             <div class="info-box">
                 <ul>
+                    <li><span>✅</span> <span>Recorte automático de documentos</span></li>
+                    <li><span>✅</span> <span>Corrección de perspectiva</span></li>
                     <li><span>✅</span> <span>Funciona sin conexión</span></li>
-                    <li><span>✅</span> <span>Instalable como app nativa</span></li>
-                    <li><span>✅</span> <span>Datos guardados localmente</span></li>
                     <li><span>✅</span> <span>OCR automático integrado</span></li>
                     <li><span>✅</span> <span>Genera PDFs descargables</span></li>
                 </ul>
             </div>
         </div>
     </div>
+
+    <canvas id="hiddenCanvas" style="display:none;"></canvas>
+    <canvas id="previewCanvas" style="display:none;"></canvas>
+    <canvas id="croppedCanvas" style="display:none;"></canvas>
+
     <script>
-        let currentImageData = null, extractedData = null, documents = [];
+        let currentImageData = null;
+        let currentImageFile = null;
+        let extractedData = null;
+        let documents = [];
         let ocrWorker = null;
+        let croppedImageData = null;
+        let opencvReady = false;
+
+        // Esperar a que OpenCV esté listo
+        function onOpenCvReady() {
+            opencvReady = true;
+            console.log('OpenCV.js cargado correctamente');
+        }
+
+        // Timeout para OpenCV (si no carga en 10 segundos, continuar sin él)
+        setTimeout(() => {
+            if (!opencvReady) {
+                console.warn('OpenCV no se cargó, continuando sin recorte automático');
+                opencvReady = 'disabled';
+            }
+        }, 10000);
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
@@ -164,15 +201,15 @@
             const file = input.files[0];
             if (!file) return;
 
+            currentImageFile = file;
             document.getElementById('error').innerHTML = '';
             document.getElementById('result').innerHTML = '';
+            document.getElementById('cropControls').style.display = 'none';
 
             const reader = new FileReader();
             reader.onload = function(e) {
                 currentImageData = e.target.result;
-                document.getElementById('preview').innerHTML = 
-                    '<img src="' + e.target.result + '" class="preview-img" alt="Preview">';
-                processImage(e.target.result);
+                detectAndCropDocument(e.target.result);
             };
             reader.onerror = function() {
                 showError('Error al leer la imagen', 'No se pudo cargar la imagen. Intenta de nuevo.');
@@ -180,20 +217,238 @@
             reader.readAsDataURL(file);
         }
 
+        function detectAndCropDocument(imageData) {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('progressText').textContent = 'Detectando documento...';
+
+            const img = new Image();
+            img.onload = function() {
+                try {
+                    if (opencvReady === true && typeof cv !== 'undefined') {
+                        performDocumentDetection(img);
+                    } else {
+                        // Si OpenCV no está disponible, usar la imagen original
+                        console.log('Usando imagen sin recorte automático');
+                        croppedImageData = imageData;
+                        document.getElementById('preview').innerHTML = 
+                            '<div class="canvas-container"><img src="' + imageData + '" class="preview-img"></div>';
+                        document.getElementById('loading').style.display = 'none';
+                        document.getElementById('cropControls').style.display = 'block';
+                    }
+                } catch (error) {
+                    console.error('Error en detección:', error);
+                    croppedImageData = imageData;
+                    document.getElementById('preview').innerHTML = 
+                        '<div class="canvas-container"><img src="' + imageData + '" class="preview-img"></div>';
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('cropControls').style.display = 'block';
+                }
+            };
+            img.src = imageData;
+        }
+
+        function performDocumentDetection(img) {
+            try {
+                // Crear canvas oculto
+                const canvas = document.getElementById('hiddenCanvas');
+                const ctx = canvas.getContext('2d');
+                
+                // Redimensionar si es muy grande
+                let width = img.width;
+                let height = img.height;
+                const maxSize = 1500;
+                
+                if (width > maxSize || height > maxSize) {
+                    const ratio = Math.min(maxSize / width, maxSize / height);
+                    width = width * ratio;
+                    height = height * ratio;
+                }
+                
+                canvas.width = width;
+                canvas.height = height;
+                ctx.drawImage(img, 0, 0, width, height);
+
+                // Convertir a formato OpenCV
+                let src = cv.imread(canvas);
+                let dst = new cv.Mat();
+                let gray = new cv.Mat();
+                let blur = new cv.Mat();
+                let edges = new cv.Mat();
+
+                // Convertir a escala de grises
+                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                
+                // Aplicar blur para reducir ruido
+                cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+                
+                // Detectar bordes
+                cv.Canny(blur, edges, 75, 200);
+
+                // Encontrar contornos
+                let contours = new cv.MatVector();
+                let hierarchy = new cv.Mat();
+                cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+                // Encontrar el contorno más grande (probablemente el documento)
+                let maxArea = 0;
+                let maxContourIndex = -1;
+                
+                for (let i = 0; i < contours.size(); i++) {
+                    let contour = contours.get(i);
+                    let area = cv.contourArea(contour);
+                    if (area > maxArea && area > (width * height * 0.1)) { // Al menos 10% del área
+                        maxArea = area;
+                        maxContourIndex = i;
+                    }
+                }
+
+                if (maxContourIndex >= 0) {
+                    let contour = contours.get(maxContourIndex);
+                    
+                    // Aproximar el contorno a un polígono
+                    let peri = cv.arcLength(contour, true);
+                    let approx = new cv.Mat();
+                    cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+
+                    // Si tenemos 4 puntos, es probablemente un documento
+                    if (approx.rows === 4) {
+                        // Aplicar transformación de perspectiva
+                        const croppedCanvas = applyPerspectiveTransform(src, approx, width, height);
+                        croppedImageData = croppedCanvas.toDataURL('image/jpeg', 0.9);
+                        
+                        document.getElementById('preview').innerHTML = 
+                            '<div class="canvas-container"><img src="' + croppedImageData + '" class="preview-img"></div>';
+                        document.getElementById('progressText').textContent = '✅ Documento detectado y recortado';
+                    } else {
+                        // No se detectó un documento cuadrilátero, usar imagen original
+                        croppedImageData = currentImageData;
+                        document.getElementById('preview').innerHTML = 
+                            '<div class="canvas-container"><img src="' + currentImageData + '" class="preview-img"></div>';
+                        document.getElementById('progressText').textContent = '⚠️ No se detectó documento, usando imagen original';
+                    }
+
+                    approx.delete();
+                } else {
+                    // No se encontró contorno válido
+                    croppedImageData = currentImageData;
+                    document.getElementById('preview').innerHTML = 
+                        '<div class="canvas-container"><img src="' + currentImageData + '" class="preview-img"></div>';
+                    document.getElementById('progressText').textContent = '⚠️ No se detectó documento, usando imagen original';
+                }
+
+                // Limpiar memoria
+                src.delete();
+                dst.delete();
+                gray.delete();
+                blur.delete();
+                edges.delete();
+                contours.delete();
+                hierarchy.delete();
+
+                setTimeout(() => {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('cropControls').style.display = 'block';
+                }, 500);
+
+            } catch (error) {
+                console.error('Error en OpenCV:', error);
+                croppedImageData = currentImageData;
+                document.getElementById('preview').innerHTML = 
+                    '<div class="canvas-container"><img src="' + currentImageData + '" class="preview-img"></div>';
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('cropControls').style.display = 'block';
+            }
+        }
+
+        function applyPerspectiveTransform(src, approx, width, height) {
+            // Obtener las 4 esquinas del documento
+            const points = [];
+            for (let i = 0; i < 4; i++) {
+                points.push({
+                    x: approx.data32S[i * 2],
+                    y: approx.data32S[i * 2 + 1]
+                });
+            }
+
+            // Ordenar puntos: top-left, top-right, bottom-right, bottom-left
+            points.sort((a, b) => a.y - b.y);
+            const topPoints = points.slice(0, 2).sort((a, b) => a.x - b.x);
+            const bottomPoints = points.slice(2, 4).sort((a, b) => a.x - b.x);
+            const orderedPoints = [...topPoints, ...bottomPoints];
+
+            // Calcular dimensiones del documento rectificado
+            const widthA = Math.sqrt(Math.pow(orderedPoints[2].x - orderedPoints[3].x, 2) + 
+                                    Math.pow(orderedPoints[2].y - orderedPoints[3].y, 2));
+            const widthB = Math.sqrt(Math.pow(orderedPoints[1].x - orderedPoints[0].x, 2) + 
+                                    Math.pow(orderedPoints[1].y - orderedPoints[0].y, 2));
+            const maxWidth = Math.max(widthA, widthB);
+
+            const heightA = Math.sqrt(Math.pow(orderedPoints[1].x - orderedPoints[2].x, 2) + 
+                                     Math.pow(orderedPoints[1].y - orderedPoints[2].y, 2));
+            const heightB = Math.sqrt(Math.pow(orderedPoints[0].x - orderedPoints[3].x, 2) + 
+                                     Math.pow(orderedPoints[0].y - orderedPoints[3].y, 2));
+            const maxHeight = Math.max(heightA, heightB);
+
+            // Crear matriz de transformación
+            const srcPoints = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                orderedPoints[0].x, orderedPoints[0].y,
+                orderedPoints[1].x, orderedPoints[1].y,
+                orderedPoints[2].x, orderedPoints[2].y,
+                orderedPoints[3].x, orderedPoints[3].y
+            ]);
+
+            const dstPoints = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                0, 0,
+                maxWidth, 0,
+                maxWidth, maxHeight,
+                0, maxHeight
+            ]);
+
+            const M = cv.getPerspectiveTransform(srcPoints, dstPoints);
+            const warped = new cv.Mat();
+            cv.warpPerspective(src, warped, M, new cv.Size(maxWidth, maxHeight));
+
+            // Convertir a canvas
+            const outputCanvas = document.getElementById('croppedCanvas');
+            outputCanvas.width = maxWidth;
+            outputCanvas.height = maxHeight;
+            cv.imshow(outputCanvas, warped);
+
+            // Limpiar
+            srcPoints.delete();
+            dstPoints.delete();
+            M.delete();
+            warped.delete();
+
+            return outputCanvas;
+        }
+
+        function acceptCrop() {
+            if (croppedImageData) {
+                processImage(croppedImageData);
+            }
+        }
+
+        function retryCrop() {
+            if (currentImageFile) {
+                const fakeInput = { files: [currentImageFile] };
+                handleImage(fakeInput);
+            }
+        }
+
         async function processImage(imageData) {
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').innerHTML = '';
             document.getElementById('error').innerHTML = '';
+            document.getElementById('cropControls').style.display = 'none';
             
             try {
                 document.getElementById('progressText').textContent = 'Inicializando OCR...';
                 
-                // Verificar conexión
                 if (!navigator.onLine) {
                     throw new Error('No hay conexión a internet. El OCR necesita internet la primera vez.');
                 }
 
-                // Crear worker con mejor manejo de errores
                 ocrWorker = await Tesseract.createWorker('fra', 1, {
                     logger: m => {
                         if (m.status === 'recognizing text') {
@@ -202,7 +457,7 @@
                                 'Extrayendo texto... ' + percent + '%';
                         } else if (m.status === 'loading tesseract core') {
                             document.getElementById('progressText').textContent = 
-                                'Descargando OCR (solo primera vez)...';
+                                'Descargando OCR...';
                         } else if (m.status === 'initializing tesseract') {
                             document.getElementById('progressText').textContent = 
                                 'Preparando OCR...';
@@ -210,9 +465,6 @@
                             document.getElementById('progressText').textContent = 
                                 'Descargando idioma francés...';
                         }
-                    },
-                    errorHandler: err => {
-                        console.error('OCR Error:', err);
                     }
                 });
 
@@ -222,7 +474,7 @@
                 ocrWorker = null;
 
                 if (!text || text.trim().length === 0) {
-                    throw new Error('No se pudo extraer texto de la imagen. Intenta con mejor luz o enfoque.');
+                    throw new Error('No se pudo extraer texto. Intenta con mejor luz o enfoque.');
                 }
 
                 extractedData = extractBLData(text);
@@ -278,7 +530,6 @@
             let numero = '', fecha = '', cliente = '', nCommande = '';
             
             try {
-                // Extraer con expresiones regulares mejoradas
                 const nombreMatch = text.match(/NOMBRE[:\s]+(\d+)/i) || 
                                    text.match(/N[°\s]*COMMANDE[:\s]*([A-Z0-9\-]+)/i) ||
                                    text.match(/(\d{7})/);
@@ -303,7 +554,6 @@
                 console.error('Error extrayendo datos:', e);
             }
 
-            // Valores por defecto si no se encontraron
             if (!numero) numero = Math.floor(Math.random() * 9000000 + 1000000).toString();
             if (!fecha) fecha = new Date().toLocaleDateString('es-ES');
             if (!cliente) cliente = 'CLIENTE EXTRAIDO';
@@ -353,7 +603,7 @@
         }
 
         function saveDocument() {
-            if (!extractedData || !currentImageData) {
+            if (!extractedData || !croppedImageData) {
                 alert('⚠️ No hay datos para guardar');
                 return;
             }
@@ -363,7 +613,7 @@
                     id: Date.now(),
                     fileName: generatePDFName(extractedData),
                     data: extractedData,
-                    image: currentImageData,
+                    image: croppedImageData,
                     timestamp: new Date().toISOString()
                 };
 
@@ -374,7 +624,9 @@
                 document.getElementById('preview').innerHTML = '';
                 document.getElementById('result').innerHTML = '';
                 document.getElementById('error').innerHTML = '';
+                document.getElementById('cropControls').style.display = 'none';
                 currentImageData = null;
+                croppedImageData = null;
                 extractedData = null;
                 
                 alert('✅ Documento guardado exitosamente!\n\n📁 BL.MTR 2025/\n' + doc.fileName);
@@ -435,7 +687,7 @@
                 
                 pdf.setFontSize(9);
                 pdf.setTextColor(128, 128, 128);
-                pdf.text('Generado por BL Scanner PWA', 105, 290, { align: 'center' });
+                pdf.text('Generado por BL Scanner Pro', 105, 290, { align: 'center' });
                 
                 pdf.save(doc.fileName);
                 
@@ -459,11 +711,9 @@
             }
         }
 
-        // Inicializar
         loadDocuments();
         updateOnlineStatus();
 
-        // Limpiar worker si la página se cierra
         window.addEventListener('beforeunload', () => {
             if (ocrWorker) {
                 ocrWorker.terminate().catch(() => {});
